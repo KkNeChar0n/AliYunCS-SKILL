@@ -53,11 +53,22 @@ response = client.get_work_item_work_flow_info(organizationId, workitemIdentifie
 ```
 
 已知状态 identifier：
+
+**通用（需求/任务都有）：**
 - `100005` = 待处理（确认阶段）
-- `100010` = 处理中（处理阶段）— 仅任务类型
-- `142838` = 开发中（开发阶段）— 仅需求类型
 - `100014` = 已完成（正常结束）
 - `141230` = 已取消（异常结束）
+
+**仅需求类型（Req）：**
+- `156603` = 设计中（设计阶段）
+- `1f49991e2d9aa8296eed3ec251` = 待开发（开发阶段）
+- `142838` = 开发中（开发阶段）
+- `100012` = 测试中（测试阶段）
+
+**仅任务类型（Task）：**
+- `100010` = 处理中（处理阶段）
+
+> 上述列表来自本项目 IDigiTrust 实际工作流；其他项目可能略有不同。若用户提到的状态名不在此清单，先调用 `GetWorkItemWorkFlowInfoRequest` 查询对应工作项的可用状态列表（见步骤 3）拿到真实 identifier 后再更新。
 
 ## 步骤 4：执行状态更新
 
@@ -76,6 +87,45 @@ client.update_work_item(organizationId, request)  # 只传2个参数！
 ```
 
 **每次调用间加 `time.sleep(0.2)` 避免限流。**
+
+### `field_type` 支持的字段（同一 API 可改多种字段）
+
+`update_work_item` 是一个通用字段更新接口，`field_type` 决定改什么字段，`property_value` 是新值：
+
+| field_type | 用途 | property_value 形态 |
+|------------|------|---------------------|
+| `status` | 修改工作项状态 | 状态 identifier（见上一节清单） |
+| `subject` | 修改工作项标题 | 新标题字符串 |
+| `description` | 修改工作项描述（含追加） | 完整描述文本（Markdown / 富文本 HTML 均可） |
+
+**`description` 用法（含追加场景）**：
+
+云效需求描述存在 `workitem.document` 字段。若是用 SDK 创建（如 `create_workitem_v2` 时传 `description=...`）的需求，document 字段就是纯文本/Markdown；若是用户在云效 UI 里写的，document 是 JSON 包裹的富文本（`{"htmlValue": "...", "jsonMLValue": [...]}`）。
+
+要追加内容到现有描述（不覆盖原文），必须先读后写：
+
+```python
+# 1. 读取现有描述
+resp = client.get_work_item_info(organizationId, workitemIdentifier)
+original = resp.body.workitem.document or ''
+
+# 2. 拼接新内容（追加 Markdown 二级标题）
+new_content = original.rstrip() + '\n\n## 新增段落标题\n- 新增内容第 1 行\n- 新增内容第 2 行\n'
+
+# 3. 写回（property_key 与 field_type 一致）
+request = UpdateWorkItemRequest(
+    identifier=workitemIdentifier,
+    field_type='description',
+    property_key='description',
+    property_value=new_content,
+)
+client.update_work_item(organizationId, request)
+```
+
+**注意**：
+- `property_value` 是**全量**写回，不是 patch。所以追加内容必须先读出 original 再拼接。
+- 如果原 description 是 JSON 富文本格式，直接传 Markdown 文本写回会丢失富文本结构，但内容仍可正常展示。
+- 对于多次反复追加的场景，建议用一个固定的小标题（如 `## 本期暂未规划`）作为锚点，便于幂等替换该锚点段而不是一直往末尾堆。
 
 ## 步骤 5：更新本地配置
 
