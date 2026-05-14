@@ -66,24 +66,62 @@ sprint_name = response.body.sprint.name
 sprint_status = response.body.sprint.status  # 'TODO'
 ```
 
-## 步骤 3：更新本地配置
+## 步骤 3：询问飞书迭代父节点 URL（可选）
 
-将迭代信息写入 `.aliyuncs.json` 的 `currentIteration` 字段：
+用 AskUserQuestion 询问「该迭代在飞书知识库的父节点 URL（用于后续自动建 PRD 节点+写文档）」：
+
+- URL 形如 `https://xxx.feishu.cn/wiki/{token}`
+- 用户可选「跳过」——跳过飞书联动
+- 填了 URL 后，立即调飞书 `wiki get_node` 校验应用对该节点有权限：
+
+```python
+import requests, json, os, re
+fcfg = json.load(open(os.path.expanduser('~/.prd-feishu/config.json')))
+# 换 tenant_access_token
+t = requests.post(f'https://{fcfg["app_domain"]}/open-apis/auth/v3/tenant_access_token/internal',
+                  json={'app_id': fcfg['app_id'], 'app_secret': fcfg['app_secret']}).json()
+TOKEN = t['tenant_access_token']
+
+m = re.search(r'/wiki/([A-Za-z0-9]+)', feishu_url)
+wiki_token = m.group(1)
+r = requests.get(f'https://{fcfg["app_domain"]}/open-apis/wiki/v2/spaces/get_node',
+                 headers={'Authorization': f'Bearer {TOKEN}'},
+                 params={'token': wiki_token}).json()
+if r.get('code') != 0:
+    # 校验失败：提示用户去飞书设链接共享，不写入 .aliyuncs.json
+    print(f'应用无权访问该飞书节点: {r}')
+    # 提示用户：节点页面 → 分享 → 链接共享 →「组织内获得链接的人可编辑」，然后重试
+else:
+    node = r['data']['node']
+    feishu_space_id = node['space_id']
+    feishu_parent_node_token = wiki_token
+```
+
+## 步骤 4：更新本地配置
+
+将迭代信息写入 `.aliyuncs.json` 的 `currentIteration` 字段。如果步骤 3 填了飞书 URL 且校验通过，一起存：
 
 ```json
 {
   "currentIteration": {
     "identifier": "迭代ID",
     "name": "项目名称 V1.X.0",
-    "status": "TODO"
+    "status": "TODO",
+    "feishu_parent_url": "https://xxx.feishu.cn/wiki/{token}",
+    "feishu_parent_node_token": "{token}",
+    "feishu_space_id": "{space_id}"
   }
 }
 ```
 
-## 步骤 4：确认完成
+如果用户没填飞书 URL，不写 `feishu_*` 三个字段（保持向后兼容）。
+
+## 步骤 5：确认完成
 
 输出迭代名称和ID。
 
 **注意**：SDK 不支持启动/完成迭代操作（无 UpdateSprint API）。请提示用户在云效界面手动点击「开始迭代」。
+
+如果配置了 `feishu_parent_url`，告知用户：后续 `/aliyuncs:create-requirement` 创建的需求会**自动**在该父节点下建空飞书 wiki 节点（无需手动操作）。
 
 提示下一步：`/aliyuncs:create-requirement`
